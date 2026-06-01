@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sync"
 	"time"
@@ -64,7 +63,7 @@ func (s *StateManager) LoadState() (*DownloadState, error) {
 		return s.state, nil
 	}
 
-	data, err := ioutil.ReadFile(s.StatePath)
+	data, err := os.ReadFile(s.StatePath)
 	if err != nil {
 		return nil, fmt.Errorf("读取状态文件失败: %v", err)
 	}
@@ -80,9 +79,14 @@ func (s *StateManager) LoadState() (*DownloadState, error) {
 }
 
 func (s *StateManager) SaveState() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
+	return s.saveStateLocked()
+}
+
+// saveStateLocked 在已持有写锁时调用，避免 Reset() 等场景死锁
+func (s *StateManager) saveStateLocked() error {
 	if s.state == nil {
 		return fmt.Errorf("状态未初始化")
 	}
@@ -94,7 +98,7 @@ func (s *StateManager) SaveState() error {
 		return fmt.Errorf("序列化状态失败: %v", err)
 	}
 
-	if err := ioutil.WriteFile(s.StatePath, data, 0644); err != nil {
+	if err := os.WriteFile(s.StatePath, data, 0644); err != nil {
 		return fmt.Errorf("写入状态文件失败: %v", err)
 	}
 
@@ -340,5 +344,5 @@ func (s *StateManager) Reset() error {
 		Completed:  0,
 	}
 
-	return s.SaveState()
+	return s.saveStateLocked()
 }

@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +32,9 @@ type DownloadWorker struct {
 	MaxRetry   int
 	Timeout    time.Duration
 
-	client *http.Client
-	mu     sync.Mutex
+	client     *http.Client
+	aria2Client *arigo.Client
+	mu          sync.Mutex
 }
 
 func NewDownloadWorker(token, aria2RPC, aria2Token, outputDir string, maxRetry int, timeout time.Duration) *DownloadWorker {
@@ -92,7 +92,7 @@ func (w *DownloadWorker) GetDownloadLink(fid int64) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %v", err)
 	}
@@ -125,12 +125,27 @@ func (w *DownloadWorker) GetDownloadLink(fid int64) (string, error) {
 	return dlink, nil
 }
 
-func (w *DownloadWorker) DownloadWithAria2(dlink, localPath, filename string) error {
+func (w *DownloadWorker) getAria2Client() (*arigo.Client, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.aria2Client != nil {
+		return w.aria2Client, nil
+	}
+
 	client, err := arigo.Dial(w.Aria2RPC, w.Aria2Token)
 	if err != nil {
-		return fmt.Errorf("连接aria2c RPC失败: %v", err)
+		return nil, fmt.Errorf("连接aria2c RPC失败: %v", err)
 	}
-	defer client.Close()
+	w.aria2Client = client
+	return client, nil
+}
+
+func (w *DownloadWorker) DownloadWithAria2(dlink, localPath, filename string) error {
+	client, err := w.getAria2Client()
+	if err != nil {
+		return err
+	}
 
 	dlink = w.appendAccessToken(dlink)
 
@@ -227,18 +242,14 @@ func (w *DownloadWorker) BatchGetDownloadLinks(fids []int64) (map[int64]string, 
 
 	baseURL := "https://pan.baidu.com/rest/2.0/xpan/multimedia"
 
-	fidsStr := "["
-	for i, fid := range fids {
-		if i > 0 {
-			fidsStr += ","
-		}
-		fidsStr += strconv.FormatInt(fid, 10)
+	fidsJSON, err := json.Marshal(fids)
+	if err != nil {
+		return nil, fmt.Errorf("序列化fid列表失败: %v", err)
 	}
-	fidsStr += "]"
 
 	params := url.Values{}
 	params.Set("method", "filemetas")
-	params.Set("fsids", fidsStr)
+	params.Set("fsids", string(fidsJSON))
 	params.Set("dlink", "1")
 	params.Set("access_token", w.Token)
 
@@ -250,7 +261,7 @@ func (w *DownloadWorker) BatchGetDownloadLinks(fids []int64) (map[int64]string, 
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %v", err)
 	}

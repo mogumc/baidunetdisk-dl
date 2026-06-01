@@ -3,11 +3,12 @@ package filelist
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -111,7 +112,7 @@ func (m *FileListManager) fetchPage(cursor int) ([]FileItem, int, bool, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("读取响应失败: %v", err)
 	}
@@ -144,7 +145,7 @@ func (m *FileListManager) LoadCache() (*FileCache, error) {
 		return nil, fmt.Errorf("缓存文件不存在: %s", m.CachePath)
 	}
 
-	data, err := ioutil.ReadFile(m.CachePath)
+	data, err := os.ReadFile(m.CachePath)
 	if err != nil {
 		return nil, fmt.Errorf("读取缓存文件失败: %v", err)
 	}
@@ -164,7 +165,7 @@ func (m *FileListManager) SaveCache(cache *FileCache) error {
 		return fmt.Errorf("序列化缓存失败: %v", err)
 	}
 
-	if err := ioutil.WriteFile(m.CachePath, data, 0644); err != nil {
+	if err := os.WriteFile(m.CachePath, data, 0644); err != nil {
 		return fmt.Errorf("写入缓存文件失败: %v", err)
 	}
 
@@ -208,9 +209,10 @@ func (m *FileListManager) GetFilesByDirectory(dirPath string) ([]FileItem, error
 		return nil, err
 	}
 
+	normalizedDir := strings.TrimSuffix(dirPath, "/") + "/"
 	var files []FileItem
 	for _, file := range cache.Files {
-		if len(file.Path) >= len(dirPath) && file.Path[:len(dirPath)] == dirPath {
+		if strings.HasPrefix(file.Path, normalizedDir) {
 			files = append(files, file)
 		}
 	}

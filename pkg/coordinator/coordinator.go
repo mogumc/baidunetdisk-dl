@@ -16,8 +16,9 @@ type DownloadCoordinator struct {
 	StateManager  *state.StateManager
 	WorkerPool    chan *downloader.DownloadWorker
 
-	mu sync.Mutex
-	wg sync.WaitGroup
+	mu       sync.Mutex
+	wg       sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func NewDownloadCoordinator(maxConcurrent int, workers []*downloader.DownloadWorker, stateManager *state.StateManager) *DownloadCoordinator {
@@ -47,10 +48,10 @@ func (c *DownloadCoordinator) Start(tasks []*downloader.DownloadTask) error {
 		c.TaskQueue <- task
 	}
 
-	close(c.TaskQueue)
+	c.closeOnce.Do(func() {
+		close(c.TaskQueue)
+	})
 	c.wg.Wait()
-
-	fmt.Println("所有下载任务完成")
 	return nil
 }
 
@@ -114,7 +115,9 @@ func (c *DownloadCoordinator) AddTask(task *downloader.DownloadTask) {
 }
 
 func (c *DownloadCoordinator) Close() {
-	close(c.TaskQueue)
+	c.closeOnce.Do(func() {
+		close(c.TaskQueue)
+	})
 	c.wg.Wait()
 }
 

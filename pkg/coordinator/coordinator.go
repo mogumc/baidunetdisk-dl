@@ -14,11 +14,10 @@ type DownloadCoordinator struct {
 	Workers       []*downloader.DownloadWorker
 	TaskQueue     chan *downloader.DownloadTask
 	StateManager  *state.StateManager
-	WorkerPool    chan *downloader.DownloadWorker
 
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	closeOnce sync.Once
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	closed bool
 }
 
 func NewDownloadCoordinator(maxConcurrent int, workers []*downloader.DownloadWorker, stateManager *state.StateManager) *DownloadCoordinator {
@@ -27,7 +26,6 @@ func NewDownloadCoordinator(maxConcurrent int, workers []*downloader.DownloadWor
 		Workers:       workers,
 		TaskQueue:     make(chan *downloader.DownloadTask, 100),
 		StateManager:  stateManager,
-		WorkerPool:    make(chan *downloader.DownloadWorker, maxConcurrent),
 	}
 }
 
@@ -35,33 +33,24 @@ func (c *DownloadCoordinator) Start(tasks []*downloader.DownloadTask) error {
 	fmt.Printf("启动下载协调器，并发数: %d\n", c.MaxConcurrent)
 
 	for i := 0; i < c.MaxConcurrent; i++ {
-		worker := c.Workers[i%len(c.Workers)]
-		c.WorkerPool <- worker
-	}
-
-	for i := 0; i < c.MaxConcurrent; i++ {
 		c.wg.Add(1)
-		go c.workerLoop(i)
+		go c.workerLoop(c.Workers[i], i)
 	}
 
 	for _, task := range tasks {
 		c.TaskQueue <- task
 	}
 
-	c.closeOnce.Do(func() {
-		close(c.TaskQueue)
-	})
+	close(c.TaskQueue)
 	c.wg.Wait()
 	return nil
 }
 
-func (c *DownloadCoordinator) workerLoop(workerID int) {
+func (c *DownloadCoordinator) workerLoop(worker *downloader.DownloadWorker, workerID int) {
 	defer c.wg.Done()
 
 	for task := range c.TaskQueue {
-		worker := <-c.WorkerPool
 		err := c.executeTask(worker, task, workerID)
-		c.WorkerPool <- worker
 
 		if err != nil {
 			fmt.Printf("[Worker %d] 下载失败: %s - %v\n", workerID, task.Path, err)
@@ -106,18 +95,24 @@ func (c *DownloadCoordinator) showProgress() {
 	completed, total := c.StateManager.GetProgress()
 	pending, downloading, _, failed := c.StateManager.GetStats()
 
-	fmt.Printf("进度: %d/%d (完成: %d, 下载中: %d, 待下载: %d, 失败: %d)\n",
-		completed, total, completed, downloading, pending, failed)
+	fmt.Printf("进度: %d/%d (下载中: %d, 待下载: %d, 失败: %d)\n",
+		completed, total, downloading, pending, failed)
 }
 
 func (c *DownloadCoordinator) AddTask(task *downloader.DownloadTask) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
 	c.TaskQueue <- task
 }
 
 func (c *DownloadCoordinator) Close() {
-	c.closeOnce.Do(func() {
-		close(c.TaskQueue)
-	})
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	close(c.TaskQueue)
 	c.wg.Wait()
 }
 

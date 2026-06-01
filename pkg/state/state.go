@@ -34,7 +34,6 @@ type DownloadState struct {
 	States     map[int64]*FileDownloadState `json:"states"`
 	UpdatedAt  int64                        `json:"updated_at"`
 	TotalFiles int                          `json:"total_files"`
-	Completed  int                          `json:"completed"`
 }
 
 type StateManager struct {
@@ -58,7 +57,6 @@ func (s *StateManager) LoadState() (*DownloadState, error) {
 			States:     make(map[int64]*FileDownloadState),
 			UpdatedAt:  time.Now().Unix(),
 			TotalFiles: 0,
-			Completed:  0,
 		}
 		return s.state, nil
 	}
@@ -177,7 +175,6 @@ func (s *StateManager) MarkCompleted(fid int64, localPath string, isVerified boo
 	state.LocalPath = localPath
 	state.IsVerified = isVerified
 	state.LastUpdate = time.Now().Unix()
-	s.state.Completed++
 
 	return nil
 }
@@ -230,7 +227,13 @@ func (s *StateManager) GetProgress() (completed, total int) {
 		return 0, 0
 	}
 
-	return s.state.Completed, s.state.TotalFiles
+	for _, state := range s.state.States {
+		if state.Status == StatusCompleted {
+			completed++
+		}
+	}
+
+	return completed, len(s.state.States)
 }
 
 func (s *StateManager) AddFile(fid int64, path string, fileSize int64) error {
@@ -341,7 +344,6 @@ func (s *StateManager) Reset() error {
 		States:     make(map[int64]*FileDownloadState),
 		UpdatedAt:  time.Now().Unix(),
 		TotalFiles: 0,
-		Completed:  0,
 	}
 
 	return s.saveStateLocked()

@@ -37,6 +37,7 @@ type FileListManager struct {
 	RootPath  string
 	CachePath string
 	client    *http.Client
+	cached    *FileCache
 	mu        sync.RWMutex
 }
 
@@ -90,6 +91,8 @@ func (m *FileListManager) FetchAll() (*FileCache, error) {
 		fmt.Printf("保存缓存失败: %v\n", err)
 	}
 
+	m.cached = cache
+
 	fmt.Printf("文件列表获取完成，共 %d 个文件\n", len(allFiles))
 	return cache, nil
 }
@@ -141,6 +144,10 @@ func (m *FileListManager) LoadCache() (*FileCache, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	if m.cached != nil {
+		return m.cached, nil
+	}
+
 	if _, err := os.Stat(m.CachePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("缓存文件不存在: %s", m.CachePath)
 	}
@@ -155,7 +162,7 @@ func (m *FileListManager) LoadCache() (*FileCache, error) {
 		return nil, fmt.Errorf("解析缓存文件失败: %v", err)
 	}
 
-	fmt.Printf("从缓存加载了 %d 个文件\n", cache.TotalCount)
+	m.cached = &cache
 	return &cache, nil
 }
 
@@ -173,45 +180,34 @@ func (m *FileListManager) SaveCache(cache *FileCache) error {
 	return nil
 }
 
-func (m *FileListManager) GetFileByPath(path string) (*FileItem, error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return nil, err
+func (m *FileListManager) GetFile(fid int64, path string) (*FileItem, error) {
+	if m.cached == nil {
+		return nil, fmt.Errorf("缓存未加载")
 	}
 
-	for _, file := range cache.Files {
-		if file.Path == path {
+	for _, file := range m.cached.Files {
+		if fid > 0 && file.FID == fid {
+			return &file, nil
+		}
+		if path != "" && file.Path == path {
 			return &file, nil
 		}
 	}
 
-	return nil, fmt.Errorf("未找到文件: %s", path)
-}
-
-func (m *FileListManager) GetFileByID(fid int64) (*FileItem, error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return nil, err
+	if path != "" {
+		return nil, fmt.Errorf("未找到文件: %s", path)
 	}
-
-	for _, file := range cache.Files {
-		if file.FID == fid {
-			return &file, nil
-		}
-	}
-
-	return nil, fmt.Errorf("未找到文件: %d", fid)
+	return nil, fmt.Errorf("未找到文件: fid=%d", fid)
 }
 
 func (m *FileListManager) GetFilesByDirectory(dirPath string) ([]FileItem, error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return nil, err
+	if m.cached == nil {
+		return nil, fmt.Errorf("缓存未加载")
 	}
 
 	normalizedDir := strings.TrimSuffix(dirPath, "/") + "/"
 	var files []FileItem
-	for _, file := range cache.Files {
+	for _, file := range m.cached.Files {
 		if strings.HasPrefix(file.Path, normalizedDir) {
 			files = append(files, file)
 		}
@@ -221,13 +217,12 @@ func (m *FileListManager) GetFilesByDirectory(dirPath string) ([]FileItem, error
 }
 
 func (m *FileListManager) GetFilesByExtension(ext string) ([]FileItem, error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return nil, err
+	if m.cached == nil {
+		return nil, fmt.Errorf("缓存未加载")
 	}
 
 	var files []FileItem
-	for _, file := range cache.Files {
+	for _, file := range m.cached.Files {
 		if !file.IsDirectory() && len(file.Filename) > len(ext) {
 			if file.Filename[len(file.Filename)-len(ext):] == ext {
 				files = append(files, file)
@@ -239,13 +234,12 @@ func (m *FileListManager) GetFilesByExtension(ext string) ([]FileItem, error) {
 }
 
 func (m *FileListManager) GetDirectoryTree() (map[string][]FileItem, error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return nil, err
+	if m.cached == nil {
+		return nil, fmt.Errorf("缓存未加载")
 	}
 
 	tree := make(map[string][]FileItem)
-	for _, file := range cache.Files {
+	for _, file := range m.cached.Files {
 		parentDir := getParentDir(file.Path)
 		tree[parentDir] = append(tree[parentDir], file)
 	}
@@ -268,12 +262,13 @@ func getParentDir(path string) string {
 }
 
 func (m *FileListManager) GetStats() (totalFiles, totalDirs, totalSize int64, err error) {
-	cache, err := m.LoadCache()
-	if err != nil {
-		return 0, 0, 0, err
+	if m.cached == nil {
+		if _, loadErr := m.LoadCache(); loadErr != nil {
+			return 0, 0, 0, loadErr
+		}
 	}
 
-	for _, file := range cache.Files {
+	for _, file := range m.cached.Files {
 		if file.IsDirectory() {
 			totalDirs++
 		} else {

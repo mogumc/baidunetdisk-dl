@@ -142,7 +142,14 @@ func (m *FileListManager) fetchPage(cursor int) ([]FileItem, int, bool, error) {
 
 func (m *FileListManager) LoadCache() (*FileCache, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if m.cached != nil {
+		defer m.mu.RUnlock()
+		return m.cached, nil
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.cached != nil {
 		return m.cached, nil
@@ -223,10 +230,8 @@ func (m *FileListManager) GetFilesByExtension(ext string) ([]FileItem, error) {
 
 	var files []FileItem
 	for _, file := range m.cached.Files {
-		if !file.IsDirectory() && len(file.Filename) > len(ext) {
-			if file.Filename[len(file.Filename)-len(ext):] == ext {
-				files = append(files, file)
-			}
+		if !file.IsDirectory() && strings.HasSuffix(file.Filename, ext) {
+			files = append(files, file)
 		}
 	}
 
